@@ -111,7 +111,7 @@ class App:
         self.renderer = renderer or Renderer(
             self.style, live=True, spinner_enabled=settings.ui.spinner and not quiet,
             show_usage=settings.ui.show_usage, show_reasoning=settings.ui.show_reasoning,
-            quiet=quiet, verbose=bool(settings.verbose))
+            quiet=quiet, verbose=bool(settings.verbose), compact=bool(settings.ui.compact))
 
         # ---- tools ------------------------------------------------------
         self.registry = build_registry(offline=self.offline,
@@ -513,6 +513,9 @@ class App:
             self.renderer.error(err)
         if not self.quiet and result.usage.total_tokens:
             totals = self.services.ledger.totals()
+            # Separate the usage footer from whatever the agent just printed so
+            # it never looks glued onto the last output line.
+            self.renderer.blank()
             self.renderer.println(self.style.dim(
                 f"  ⌁ {result.turns} turn(s) · {result.tool_calls} tool(s) · "
                 f"{format_number(result.usage.input_tokens)}→{format_number(result.usage.output_tokens)} tok · "

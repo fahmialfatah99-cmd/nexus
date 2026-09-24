@@ -97,6 +97,8 @@ def add_common_flags(parser: argparse.ArgumentParser, exclude: Sequence[str] = (
                        help="never open clickable menus; use the numbered text list")
     group.add_argument("-q", "--quiet", action="store_true", help="minimal output (for scripts)")
     group.add_argument("--no-spinner", action="store_true")
+    group.add_argument("--compact", action="store_true",
+                       help="compact output: fold tool results onto the tool line")
     group.add_argument("--no-markdown", action="store_true", help="plain text output")
 
     group = parser.add_argument_group("session")
@@ -162,6 +164,8 @@ def settings_from_args(args: argparse.Namespace) -> Settings:
         ui["theme"] = args.theme
     if getattr(args, "no_spinner", False):
         ui["spinner"] = False
+    if getattr(args, "compact", False):
+        ui["compact"] = True
     if getattr(args, "no_markdown", False):
         ui["markdown"] = False
     if getattr(args, "lang", ""):

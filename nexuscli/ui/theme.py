@@ -133,20 +133,30 @@ def wrap_text(text: str, width: int, *, indent: str = "", subsequent_indent: str
 
 
 def terminal_width(default: int = 100) -> int:
+    """Best-effort output width.
+
+    Order of precedence: ``NEXUS_WIDTH`` (explicit override, useful in
+    tmux/screen where the detected size can be stale), then the real terminal,
+    then ``COLUMNS``, then *default*. Anything we return is clamped to
+    ``[40, 200]`` so boxes never collapse on very narrow terminals and never
+    run away on ultrawide ones.
+    """
+    def clamp(value: int) -> int:
+        return max(40, min(value, 200))
+    for var in ("NEXUS_WIDTH", "COLUMNS"):
+        try:
+            value = int(os.environ.get(var, ""))
+        except ValueError:
+            continue
+        if value > 20:
+            return clamp(value)
     try:
         size = os.get_terminal_size(sys.stdout.fileno())
         if size.columns > 20:
-            return min(size.columns, 200)
+            return clamp(size.columns)
     except (OSError, ValueError, AttributeError):
         pass
-    for var in ("COLUMNS",):
-        try:
-            value = int(os.environ.get(var, ""))
-            if value > 20:
-                return min(value, 200)
-        except ValueError:
-            continue
-    return default
+    return clamp(default)
 
 
 # --------------------------------------------------------------------------- #
