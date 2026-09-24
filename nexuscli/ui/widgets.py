@@ -56,20 +56,38 @@ def format_cost(usd: float) -> str:
 class Spinner:
     """Background spinner that never corrupts output when stdout is not a TTY."""
 
-    def __init__(self, style: Style, message: str = "", *, stream=None, enabled: bool = True) -> None:
+    def __init__(self, style: Style, message: str = "", *, stream=None, enabled: bool = True,
+                 lock: Optional[threading.Lock] = None) -> None:
         self.style = style
         self.message = message
         self.stream = stream if stream is not None else sys.stdout
         self.enabled = bool(enabled and getattr(self.stream, "isatty", lambda: False)())
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
-        self._lock = threading.Lock()
+        # Shared with the Renderer when provided: painting a frame and erasing
+        # it must be atomic against application output, or the two writers
+        # interleave (garbled lines under tmux/screen).
+        self._lock = lock if lock is not None else threading.Lock()
         self._started = time.monotonic()
         self._frames = itertools.cycle(SPINNER_FRAMES if style.enabled else ASCII_SPINNER)
 
     def set_message(self, message: str) -> None:
         with self._lock:
             self.message = message
+
+    def _paint(self, text: str) -> None:
+        """Write one in-place update; caller must hold ``self._lock``."""
+        try:
+            self.stream.write(text)
+            self.stream.flush()
+        except (ValueError, OSError):
+            pass
+
+    def clear_line(self, stream=None) -> None:
+        """Erase the spinner's current line. Locks, so it cannot race a frame."""
+        with self._lock:
+            if self.enabled:
+                self._paint("\r\x1b[K")
 
     def start(self, message: Optional[str] = None) -> "Spinner":
         if message is not None:
@@ -87,17 +105,13 @@ class Spinner:
             while not self._stop.is_set():
                 with self._lock:
                     message = self.message
-                frame = next(self._frames)
-                elapsed = time.monotonic() - self._started
-                text = f"\r{self.style.paint('accent', frame)} {self.style.dim(truncate(message, 70))}"
-                if elapsed >= 2:
-                    text += self.style.dim(f" {elapsed:.0f}s")
-                text += "\x1b[K"
-                try:
-                    self.stream.write(text)
-                    self.stream.flush()
-                except (ValueError, OSError):
-                    break
+                    frame = next(self._frames)
+                    elapsed = time.monotonic() - self._started
+                    text = f"\r{self.style.paint('accent', frame)} {self.style.dim(truncate(message, 70))}"
+                    if elapsed >= 2:
+                        text += self.style.dim(f" {elapsed:.0f}s")
+                    text += "\x1b[K"
+                    self._paint(text)
                 self._stop.wait(0.08)
         except Exception:  # a spinner must never break the app
             pass
@@ -107,18 +121,11 @@ class Spinner:
         if self._thread is not None:
             self._thread.join(timeout=1.0)
             self._thread = None
-        if self.enabled:
-            try:
-                self.stream.write("\r\x1b[K")
-                self.stream.flush()
-            except (ValueError, OSError):
-                pass
-        if final:
-            try:
-                self.stream.write(final + "\n")
-                self.stream.flush()
-            except (ValueError, OSError):
-                pass
+        with self._lock:
+            if self.enabled:
+                self._paint("\r\x1b[K")
+            if final:
+                self._paint(final + "\n")
 
     def __enter__(self) -> "Spinner":
         return self.start()
@@ -140,6 +147,11 @@ def box(title: str, lines: Sequence[str], style: Style, *, width: int = 0, role:
         for wrapped in wrap_text(line, inner):
             body.append(wrapped)
     top_title = f" {title} " if title else ""
+    # The title segment must fit inside the frame: otherwise the fill goes to
+    # zero and the top border ends up wider than every other row (ragged box,
+    # especially visible with CJK/emoji titles). Total width is always inner+4.
+    top_title = truncate(top_title, max(0, inner))
+    # "┌─" + title + fill + "┐" must total inner+4 cells: 2 + title + fill + 1.
     top = "┌─" + top_title + "─" * max(0, inner + 1 - visible_width(top_title)) + "┐"
     rows = [style.paint(role, top)]
     for line in body:

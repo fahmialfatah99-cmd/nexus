@@ -219,11 +219,10 @@ class MenuState:
         self.assign_shortcuts()
         matches = self.matches()
         inner, total = self._geometry(width)
+        # The title (and live filter text) are painted into the top border
+        # itself -- a separate header row would duplicate them and make every
+        # box one line taller than it needs to be.
         out: List[Tuple[str, Any, str]] = [("frame", None, self._line("top", inner, total))]
-        header = self.title or "Menu"
-        if self.filter_text:
-            header += f"  ·  filter: {self.filter_text}"
-        out.append(("header", None, self._body(header, inner, total, "header")))
         if self.prompt:
             out.append(("prompt", None, self._body(self.prompt, inner, total, "prompt")))
         if not matches:
@@ -291,13 +290,18 @@ class MenuState:
 
     def _line(self, which: str, inner: int, total: int) -> str:
         if which == "top":
-            head = truncate(f" {self.title or 'Menu'} ", max(4, total - 4))
+            head = f" {self.title or 'Menu'} "
+            if self.filter_text:
+                head += f"· filter: {self.filter_text} "
+            # Keep the whole title+filter segment inside the frame so the row
+            # width never depends on how wide the title happens to be.
+            head = truncate(head, max(4, total - 3))
             fill = max(0, total - 3 - visible_width(head))
             return self._paint("border", "┌─" + head + "─" * fill + "┐")
         return self._paint("border", "└" + "─" * (total - 2) + "┘")
 
     def _body(self, text: str, inner: int, total: int, kind: str) -> str:
-        role = {"header": "bold", "prompt": "dim", "empty": "warning",
+        role = {"prompt": "dim", "empty": "warning",
                 "scroll": "dim"}.get(kind, "text")
         text = truncate(text, inner)
         body = self._paint(role, text) + " " * max(0, inner - visible_width(text))

@@ -43,9 +43,14 @@ RISK_ROLE = {"normal": "accent", "elevated": "warning", "dangerous": "error"}
 
 
 class Renderer:
+    #: horizontal indent for tool lines so they visibly hang under the agent's
+    #: prose instead of competing with it at column 0.
+    TOOL_INDENT = "  "
+
     def __init__(self, style: Style, *, stream=None, err_stream=None, live: bool = True,
                  spinner_enabled: bool = True, show_usage: bool = True, show_reasoning: bool = True,
-                 quiet: bool = False, verbose: bool = False, input_fn=None) -> None:
+                 quiet: bool = False, verbose: bool = False, input_fn=None,
+                 compact: bool = False) -> None:
         self.style = style
         self.out = stream if stream is not None else sys.stdout
         self.err = err_stream if err_stream is not None else sys.stderr
@@ -55,6 +60,8 @@ class Renderer:
         self.show_reasoning = show_reasoning
         self.quiet = quiet
         self.verbose = verbose
+        #: compact UI: tool results fold onto the tool line (one row per call)
+        self.compact = compact
         self._input = input_fn or input
         self._lock = threading.RLock()
         self._stream_md: Dict[str, StreamingMarkdown] = {}
@@ -68,6 +75,9 @@ class Renderer:
         #: True when streamed text ended mid-line; the next block of output must
         #: start with a newline so tool lines never glue onto prose.
         self._partial_line = False
+        #: compact mode bookkeeping (see on_tool_start/on_tool_end)
+        self._last_tool_line = ""
+        self._pending_tool_line = ""
 
     # ------------------------------------------------------------------ #
     # low level
@@ -84,21 +94,33 @@ class Renderer:
                 pass
 
     def println(self, text: str = "") -> None:
-        self._break_partial_line()
-        self.write(text + "\n")
+        # Take the lock so a concurrent spinner frame can never interleave with
+        # (or clobber) a full line we are about to emit.
+        with self._lock:
+            self._break_partial_line()
+            self.write(text + "\n")
 
     def _break_partial_line(self) -> None:
         if self._partial_line:
             self._partial_line = False
-            self.write("\n")
-
-    def _stop_spinner_transiently(self) -> None:
-        if self._spinner is not None and self._spinner.enabled:
+            # Write directly: we already hold the lock via println(), and this
+            # must not recurse back through the spinner-clear path.
             try:
-                self.out.write("\r\x1b[K")
+                self.out.write("\n")
                 self.out.flush()
             except (ValueError, OSError):
                 pass
+
+    def _stop_spinner_transiently(self) -> None:
+        """Clear the spinner's current frame without killing its thread.
+
+        Only safe while holding ``self._lock``: the spinner thread takes the
+        same lock for every frame it paints, so the clear cannot race with a
+        redraw (that race used to leave stale ``⠋ thinking`` fragments glued to
+        output in tmux/screen where widths differ).
+        """
+        if self._spinner is not None and self._spinner.enabled:
+            self._spinner.clear_line(self.out)
 
     def _restart_spinner(self) -> None:
         if self._spinner is not None and self._spinner.enabled:
@@ -157,7 +179,7 @@ class Renderer:
         with self._lock:
             if self._spinner is None:
                 self._spinner = Spinner(self.style, message, stream=self.out,
-                                        enabled=self.spinner_enabled)
+                                        enabled=self.spinner_enabled, lock=self._lock)
             else:
                 self._spinner.set_message(message)
             self._spinner.start(message)
@@ -234,13 +256,19 @@ class Renderer:
         if self.quiet:
             return
         summary = _summarise_args(name, args)
-        prefix = self._agent_prefix(agent)
+        prefix = self._agent_prefix(agent) + self.TOOL_INDENT
         line = f"{prefix}{self.style.paint('tool', '⚙')} {self.style.bold(name)}{self.style.dim(summary)}"
         if self.live:
             self.stop_spinner()
+            # In compact mode the result is folded onto this line by
+            # on_tool_end (one row per call), so remember it.
+            self._last_tool_line = line if self.compact else ""
             self.println(line)
         else:
-            self._buffers.setdefault(agent, []).append(line + "\n")
+            if self.compact:
+                self._pending_tool_line = line
+            else:
+                self._buffers.setdefault(agent, []).append(line + "\n")
 
     def on_tool_end(self, name: str, result: Any, agent: str = "main") -> None:
         if self.quiet:
@@ -252,18 +280,38 @@ class Renderer:
         if elapsed:
             detail += self.style.dim(f" · {format_duration(elapsed)}")
         icon = self.style.paint("success" if ok else "error", "✓" if ok else "✗")
-        prefix = self._agent_prefix(agent)
-        line = f"{prefix}{icon} {self.style.dim(truncate(detail, max(30, self.style.width - 20)))}"
+        prefix = self._agent_prefix(agent) + self.TOOL_INDENT
+        if self.compact and ok:
+            tail = self.style.dim("  " + truncate(detail, max(30, self.style.width - len(prefix) - 24)))
+            if self.live:
+                last = getattr(self, "_last_tool_line", "")
+                if last:
+                    # Rewrite the previous line in place: start+result on one row.
+                    self.write("\r\x1b[K" + last + tail + "\n")
+                    self._last_tool_line = ""
+                    return
+                self.println(f"{prefix}{icon}{tail}")
+            else:
+                pending = getattr(self, "_pending_tool_line", "")
+                self._pending_tool_line = ""
+                self._buffers.setdefault(agent, []).append((pending or f"{prefix}{icon}") + tail + "\n")
+            return
+        line = f"{prefix}  {icon} {self.style.dim(truncate(detail, max(30, self.style.width - 22)))}"
+        self._last_tool_line = ""
         if self.live:
             self.println(line)
         else:
+            pending = getattr(self, "_pending_tool_line", "")
+            if pending:
+                self._buffers.setdefault(agent, []).append(pending + "\n")
+                self._pending_tool_line = ""
             self._buffers.setdefault(agent, []).append(line + "\n")
             if not ok and content:
                 for extra in content.split("\n")[:6]:
                     self._buffers[agent].append(self.style.dim("    " + truncate(extra, self.style.width - 8)) + "\n")
 
     def on_tool_denied(self, name: str, reason: str, agent: str = "main") -> None:
-        line = (f"{self._agent_prefix(agent)}{self.style.paint('warning', '⊘')} "
+        line = (f"{self._agent_prefix(agent)}{self.TOOL_INDENT}{self.style.paint('warning', '⊘')} "
                 f"{self.style.paint('warning', name)} {self.style.dim('denied: ' + reason)}")
         self.println(line) if self.live else self._buffers.setdefault(agent, []).append(line + "\n")
 
