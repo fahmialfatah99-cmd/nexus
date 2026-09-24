@@ -1,0 +1,64 @@
+{
+  "_comment": "Example ~/.nexus/config.json -- every key is optional; see `nexus config list` for defaults.",
+  "default_provider": "anthropic",
+  "default_model": "claude-sonnet-4-5",
+  "approval_mode": "auto-edit",
+  "temperature": 0.2,
+  "max_turns": 40,
+  "stream": true,
+
+  "failover": ["groq:llama-3.3-70b-versatile", "openai:gpt-4o-mini"],
+
+  "providers": {
+    "anthropic": { "api_key_env": "ANTHROPIC_API_KEY" },
+    "openai":    { "api_key_env": "OPENAI_API_KEY" },
+    "groq":      { "api_key_env": "GROQ_API_KEY" },
+    "ollama":    { "base_url": "http://localhost:11434/v1" },
+    "gateway":   {
+      "base_url": "https://my-gateway.internal/v1",
+      "api_key_env": "GATEWAY_TOKEN",
+      "headers": { "X-Tenant": "team-a" },
+      "extra": { "use_max_completion_tokens": true, "extra_body": { "top_k": 40 } }
+    }
+  },
+
+  "permissions": {
+    "allow": ["read_file:*", "grep:*", "find_files:*", "list_dir:*", "file_info:*",
+              "git:status", "git:diff", "git:log", "git:branch"],
+    "deny":  ["bash:rm -rf *", "bash:sudo *", "write_file:.env*", "write_file:**/secrets/**",
+              "git:push --force"],
+    "ask":   ["bash:docker *"]
+  },
+
+  "ui": { "theme": "dark", "spinner": true, "show_usage": true, "show_reasoning": true },
+
+  "swarm": {
+    "mode": "hive",
+    "max_parallel": 4,
+    "max_rounds": 3,
+    "max_turns_per_agent": 16,
+    "reviewer_gate": true,
+    "model_specs": {
+      "orchestrator": "anthropic:claude-sonnet-4-5",
+      "reviewer": "anthropic:claude-sonnet-4-5",
+      "implementer": "groq:llama-3.3-70b-versatile",
+      "tester": "groq:llama-3.3-70b-versatile"
+    }
+  },
+
+  "compaction": { "enabled": true, "threshold": 0.82, "keep_recent": 6 },
+
+  "project_context": { "enabled": true, "tree_depth": 3, "max_files": 300, "max_chars": 12000 },
+
+  "search": { "backend": "brave" },
+
+  "mcp": {
+    "servers": {
+      "filesystem": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "."] }
+    }
+  },
+
+  "tools": { "disabled": [] },
+  "memory": { "enabled": true },
+  "session": { "persist": true, "keep": 50 }
+}

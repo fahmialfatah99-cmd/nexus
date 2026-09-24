@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.nexus/checkpoints/
+.nexus/sessions/
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.DS_Store
