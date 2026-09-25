@@ -37,6 +37,12 @@ except Exception:  # pragma: no cover
     _TIKTOKEN = None
 
 _ENCODINGS: Dict[str, Any] = {}
+# Hard ceiling for exact tiktoken encoding. BPE on very long inputs is slow
+# (seconds per megabyte) and the budgeting ladder re-counts tokens on every
+# squeeze/prune pass, so past this size we fall back to the linear heuristic.
+# The result stays deterministic either way; overflow decisions only get
+# slightly coarser for pathologically large messages.
+_EXACT_ENCODE_MAX_CHARS = 32_000
 _CJK_RE = re.compile(
     "[\u3000-\u303f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef"
     "\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]"
@@ -66,12 +72,13 @@ def estimate_tokens(text: str, model: str = "") -> int:
     """Estimate the token count of *text*. Never raises."""
     if not text:
         return 0
-    enc = _encoding_for(model)
-    if enc is not None:
-        try:  # pragma: no cover - depends on optional dep
-            return len(enc.encode(text, disallowed_special=()))
-        except Exception:
-            pass
+    if len(text) <= _EXACT_ENCODE_MAX_CHARS:
+        enc = _encoding_for(model)
+        if enc is not None:
+            try:  # pragma: no cover - depends on optional dep
+                return len(enc.encode(text, disallowed_special=()))
+            except Exception:
+                pass
     cjk = len(_CJK_RE.findall(text))
     other = len(text) - cjk
     return int(cjk * 1.0 + other / 3.6 + 1)
@@ -220,12 +227,15 @@ class ContextManager:
 
         cut = self._tail_cut(work, protect)
         idxs = [i for i in range(cut) if work[i].role == "tool"]
-        idxs.sort(key=lambda i: -len(content_to_text(work[i].content)))
+        # Order by estimated tokens (cheap char/CJK heuristic), not raw length:
+        # squeezing the biggest consumer first keeps the number of full
+        # re-counts below linear in the worst case.
+        idxs.sort(key=lambda i: -estimate_tokens(content_to_text(work[i].content)))
         squeezed = 0
         for i in idxs:
             text = content_to_text(work[i].content)
             if len(text) <= self.config.shrink_to_chars:
-                continue
+                continue  # sorted by size: nothing later can be bigger
             self._replace_tool(work, i, clip(text, self.config.shrink_to_chars))
             squeezed += 1
             if self._fits(work, limit, model):

@@ -47,7 +47,7 @@ import `app`.
   the user's request.
 
 ## Definition of done
-- `python3 tests/run_tests.py` is green (554 tests at the time of writing)
+- `python3 tests/run_tests.py` is green (763 tests at the time of writing)
 - `./nexus doctor` passes, `./nexus demo` runs clean
 - Every subcommand builds: `TestParserIntegrity` covers argparse conflicts
 - No new `print()` outside `ui/`, no new third-party import

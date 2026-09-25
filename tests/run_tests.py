@@ -13,12 +13,35 @@ verify their installation without installing pytest.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import sys
 import unittest
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
+
+
+def _load_module(path: Path):
+    """Load a test module by file path.
+
+    Loading via ``spec_from_file_location`` with a synthetic module name avoids
+    the dotted-name import machinery entirely, so an unrelated ``tests``
+    package elsewhere on ``sys.path`` (e.g. in site-packages) can never shadow
+    or conflict with this repo's test files.
+    """
+    module_name = f"nexus_tests_{path.stem}"
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot create import spec for {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(module_name, None)
+        raise
+    return module
 
 
 def build_suite(patterns: list) -> unittest.TestSuite:
@@ -29,7 +52,7 @@ def build_suite(patterns: list) -> unittest.TestSuite:
             continue
         module_name = f"tests.{path.stem}"
         try:
-            module = __import__(module_name, fromlist=[path.stem])
+            module = _load_module(path)
         except Exception as exc:  # import error must be reported, not swallowed
             print(f"!! could not import {module_name}: {exc}", file=sys.stderr)
             raise

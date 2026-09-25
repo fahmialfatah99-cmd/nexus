@@ -16,6 +16,7 @@ missing import.
 from __future__ import annotations
 
 import ast
+import re
 import builtins
 import sys
 import unittest
@@ -159,6 +160,53 @@ class TestNoUndefinedNames(unittest.TestCase):
                             if key.value in seen:
                                 self.fail(f"{path.name}: duplicated dict key {key.value!r}")
                             seen.append(key.value)
+
+
+class TestDocCountsMatchCode(unittest.TestCase):
+    """README/AGENTS.md hard-code counts that rot when the code changes.
+
+    These guards fail loudly the moment a provider/tool is added or removed
+    without updating the docs (the README once claimed 26 providers while the
+    registry had 27).
+    """
+
+    def test_readme_provider_count_matches_registry(self):
+        from nexuscli.providers import registry
+
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        claimed = {int(m) for m in re.findall(r"(\d+) model providers", readme)}
+        actual = len(registry.PROVIDERS)
+        self.assertEqual(claimed, {actual},
+                         f"README claims {sorted(claimed)} model providers, registry has {actual}")
+
+    def test_readme_tool_count_matches_registry(self):
+        from nexuscli.tools import build_registry
+
+        # "21 tools" in the README counts built-ins + swarm tools (see docs/ARCHITECTURE.md).
+        actual = len(build_registry(include_swarm_tools=True).names())
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        claimed = {int(m) for m in re.findall(r"(\d+) tools", readme)}
+        self.assertEqual(claimed, {actual},
+                         f"README claims {sorted(claimed)} tools, registry has {actual}")
+
+    def test_agents_md_test_count_is_not_stale(self):
+        """AGENTS.md's 'N tests at the time of writing' must match the real suite."""
+        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        claimed = [int(m) for m in re.findall(r"\((\d+) tests at the time of writing\)", agents)]
+        if not claimed:
+            self.skipTest("AGENTS.md no longer pins a test count")
+        sys.path.insert(0, str(ROOT / "tests"))
+        try:
+            import run_tests
+        finally:
+            sys.path.remove(str(ROOT / "tests"))
+        suite = run_tests.build_suite([])
+        total = unittest.TestSuite()
+        total.addTests(suite)
+        actual = total.countTestCases()
+        self.assertEqual(claimed[-1], actual,
+                         f"AGENTS.md says {claimed[-1]} tests but the suite has {actual}; "
+                         "update AGENTS.md (or the runner)")
 
 
 if __name__ == "__main__":
