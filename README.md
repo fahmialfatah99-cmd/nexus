@@ -1,7 +1,7 @@
 # NEXUS — agentic CLI, zero dependencies
 
 A terminal coding agent that runs on **pure Python standard library** — nothing to install,
-nothing to break. 26 model providers, 21 tools, checkpointed edits, a permission engine,
+nothing to break. 27 model providers, 21 tools, checkpointed edits, a permission engine,
 context budgeting, MCP support, plugins, and a **multi-persona swarm mode**.
 
 ```

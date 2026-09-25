@@ -381,20 +381,35 @@ def load_auth() -> Dict[str, str]:
     return {str(k): str(v) for k, v in keys.items()}
 
 
+def _write_private_json(path: Path, data: dict) -> None:
+    """Write *data* as JSON to *path* with owner-only (0600) permissions.
+
+    The file is created via ``os.open`` with mode 0o600 so the secret payload
+    is never briefly readable by other users; if the file already exists its
+    mode is tightened *before* the contents are replaced.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = (json.dumps(data, indent=2) + "\n").encode("utf-8")
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, payload)
+    finally:
+        os.close(fd)
+    try:
+        os.chmod(path, 0o600)  # covers pre-existing files created with wider modes
+    except OSError:
+        pass
+
+
 def save_auth_key(provider: str, api_key: str) -> Path:
     from .paths import auth_file
 
     path = auth_file()
-    path.parent.mkdir(parents=True, exist_ok=True)
     data = load_json(path)
     keys = data.get("keys") if isinstance(data.get("keys"), dict) else {}
     keys[provider] = api_key
     data["keys"] = keys
-    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    try:
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
+    _write_private_json(path, data)
     return path
 
 
